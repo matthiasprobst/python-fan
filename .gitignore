@@ -1,0 +1,36 @@
+*.xml
+*.iml
+*.pyc
+*-checkpoint.ipynb*
+*.nc
+*.hdf
+*.yaml
+*.b16
+*.uns
+*.bak
+
+# testdata
+opencefadb/tests/data
+
+# build
+*.egg*
+build/
+dist/
+
+# Spyder project settings
+.spyderproject
+.spyproject
+
+# pyCharm project setting
+.idea
+.idea/
+
+# macOS DS indices
+.DS_STORE
+Thumbs.db
+
+# testdata
+testdata
+
+# jupyter
+*.ipynb_checkpoints*

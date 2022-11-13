@@ -1,6 +1,7 @@
 """Core module"""
 
 import enum
+import pathlib
 from dataclasses import dataclass
 from typing import Union, List, Tuple
 
@@ -14,6 +15,8 @@ from . import dimless
 class FanProperties:
     """Fan properties class"""
     D2: float
+    area_inlet: float
+    area_outlet: float
 
 
 class _FanIntegralQuantity:
@@ -72,6 +75,38 @@ class FanTotalPressureDifference(_FanIntegralQuantity):
         return ax
 
 
+class FanStaticPressureDifference(_FanIntegralQuantity):
+    """Fan Total Pressure Difference Class"""
+
+    def __init__(self,
+                 vfr: Union[float, np.ndarray],
+                 dpstat: Union[float, np.ndarray]):
+        self.vfr = vfr
+        self.values = dpstat
+
+    def plot(self, *args, **kwargs):
+        """Plot the total pressure difference. x value is the volume flow rate"""
+        ax = super().plot(*args, **kwargs)
+        ax.set_ylabel('Fan static pressure difference / $Pa$')
+        return ax
+
+
+class FanRevolutionSpeed(_FanIntegralQuantity):
+    """Fan Total Pressure Difference Class"""
+
+    def __init__(self,
+                 vfr: Union[float, np.ndarray],
+                 revspeed: Union[float, np.ndarray]):
+        self.vfr = vfr
+        self.values = revspeed
+
+    def plot(self, *args, **kwargs):
+        """Plot the revolution speed"""
+        ax = super().plot(*args, **kwargs)
+        ax.set_ylabel('Fan revolution speed / $1/s$')
+        return ax
+
+
 class FanPsi(_FanIntegralQuantity):
     """Pressure Number Class"""
 
@@ -101,6 +136,7 @@ class FanPhi(_FanIntegralQuantity):
         """Plot the total pressure difference. x value is the volume flow rate"""
         ax = super().plot(*args, **kwargs)
         ax.set_ylabel('Flow Number / -')
+        ax.set_xlabel('Flow Number / -')
         return ax
 
 
@@ -109,8 +145,9 @@ class FanOperationPoint:
 
     def __init__(self,
                  vfr: np.ndarray = None,
+                 dpstat: np.ndarray = None,
                  dptot: np.ndarray = None,
-                 etatot: np.ndarray = None,
+                 torque: np.ndarray = None,
                  revspeed: Union[float, np.ndarray] = None,
                  fan_properties: FanProperties = None,
                  density: Union[float, np.ndarray] = 1.2
@@ -139,13 +176,21 @@ class FanOperationPoint:
             self._vfr = -1 * vfr
         else:
             self._vfr = vfr
-        self._dptot = dptot
-        self._etatot = etatot
+        self._torque = torque
+        self._etatot = None
+        self._fluid_power = None
+        self._mech_power = None
         self._rho = density
         self._revspeed = revspeed
         if not isinstance(fan_properties, FanProperties):
             raise TypeError(f'Expect class FanProperties for parameter fan_properties but git {type(fan_properties)}')
         self._fan_properties = fan_properties
+        self._dpstat = dpstat
+        if dpstat is not None and dptot is None:
+            self._dptot = dpstat + self._rho / 2 * (self._vfr / fan_properties.area_outlet) ** 2 - self._rho / 2 * (
+                    self._vfr / fan_properties.area_inlet) ** 2
+        else:
+            self._dptot = dptot
 
     def __lt__(self, other) -> bool:
         return np.mean(self._vfr) < np.mean(other.vfr)
@@ -168,45 +213,55 @@ class FanOperationPoint:
         return FanTotalPressureDifference(self._vfr, self._dptot)
 
     @property
+    def dpstat(self) -> FanTotalPressureDifference:
+        """Fan total pressure difference"""
+        return FanStaticPressureDifference(self._vfr, self._dpstat)
+
+    @property
+    def revspeed(self):
+        """Fan revolution speed"""
+        return FanRevolutionSpeed(self._vfr, self._revspeed)
+
+    @property
     def etatot(self) -> FanTotalEfficiency:
         """Fan total efficiency"""
-        return FanTotalEfficiency(self._vfr, self._etatot)
+        if self._etatot is None:
+            self._fluid_power = np.nanmean(self._vfr * self._dptot)
+            self._mech_power = np.nanmean(self._torque) * 2 * np.pi * np.nanmean(self._revspeed)
+            self._etatot = self._fluid_power / self._mech_power
+        return FanTotalEfficiency(self._vfr, np.ones_like(self._vfr) * self._etatot)
 
-    def plot_fan_total_pressure(self, ax=None, mean=False, marker='+', color=None):
+    def plot_fan_total_pressure(self, mean=False, **kwargs):
         """Plot fan total pressure"""
+        ax = kwargs.pop('ax', None)
         if ax is None:
             ax = plt.gca()
         if mean:
-            ax.plot(np.mean(self.vfr), np.mean(self.dptot), marker=marker, color=color)
-        else:
-            ax.plot(self.vfr, self.dptot, marker=None, color=color)
-        return ax
+            return ax.plot(np.mean(self.vfr), np.mean(self.dptot), **kwargs)
+        return ax.plot(self.vfr, self.dptot, **kwargs)
 
     @property
     def psi(self):
         """Head coefficient (dimensionless number)"""
-        return FanPsi(self._vfr,
-                      dimless.psi(self._dptot,
-                                  self._revspeed,
-                                  self._rho,
-                                  self._fan_properties.D2)
-                      )
+        return dimless.psi(dp=self._dptot,
+                           n=self._revspeed,
+                           rho=self._rho,
+                           D=self._fan_properties.D2)
 
     @property
     def phi(self) -> Union[float, np.ndarray]:
-        """Flow coefficient (dimensionles number)"""
-        return FanPhi(self._vfr,
-                      dimless.phi(self._vfr,
-                                  self._revspeed,
-                                  self._fan_properties.D2)
-                      )
+        """Flow coefficient (dimensionless number)"""
+        return dimless.phi(self._vfr,
+                           self._revspeed,
+                           self._fan_properties.D2)
 
     def affine(self, n_new: float) -> "FanOperationPoint":
         """Return an affine operation point with new revolution speed n_new"""
-        return FanOperationPoint(self._vfr * n_new / self._revspeed,
-                                 self._dptot * n_new ** 2 / self._revspeed ** 2,
-                                 self._etatot,
-                                 self._revspeed,
+        return FanOperationPoint(vfr=self._vfr * n_new / self._revspeed,
+                                 dpstat=self._dpstat * n_new ** 2 / self._revspeed ** 2,
+                                 dptot=self._dptot * n_new ** 2 / self._revspeed ** 2,
+                                 torque=self._torque,
+                                 revspeed=self._revspeed,
                                  fan_properties=self._fan_properties,
                                  density=self._rho)
 
@@ -227,6 +282,21 @@ class FanCurve:
     operation_points: List[FanOperationPoint]
     name: str = None
 
+    @property
+    def vfr(self) -> np.ndarray:
+        """average volume flow rate of every op"""
+        return [np.nanmean(op._vfr) for op in self.operation_points]
+
+    @property
+    def dptot(self) -> np.ndarray:
+        """average total pressure difference of every op"""
+        return [np.nanmean(op._dptot) for op in self.operation_points]
+
+    @property
+    def dpstat(self) -> np.ndarray:
+        """average static pressure difference of every op"""
+        return [np.nanmean(op._dpstat) for op in self.operation_points]
+
     def __repr__(self) -> str:
         return f'<FanCurve nop={self.__len__()}>'
 
@@ -246,23 +316,30 @@ class FanCurve:
     def __post_init__(self):
         self.operation_points = sorted(self.operation_points)
 
-    def plot_pressure_curve(self, *args, **kwargs):
+    def plot_total_pressure_curve(self, *args, **kwargs):
         """Plot the pressure fan curve"""
         ax = kwargs.pop('ax', None)
-        dimless = kwargs.pop('dimless', False)
+        plot_dimless = kwargs.pop('dimless', False)
         if ax is None:
             ax = plt.gca()
-        if dimless:
-            op_mean = [op.psi.mean() for op in self.operation_points]
-            op_std = [op.psi.std() for op in self.operation_points]
+        if plot_dimless:
+            psi_mean = [np.nanmean(op.psi) for op in self.operation_points]
+            phi_mean = [np.nanmean(op.phi) for op in self.operation_points]
+            psi_std = [np.nanstd(op.psi) for op in self.operation_points]
+            phi_std = [np.nanstd(op.phi) for op in self.operation_points]
+            ax.errorbar(phi_mean,
+                        psi_mean,
+                        phi_std,
+                        psi_std,
+                        *args, **kwargs)
         else:
             op_mean = [op.dptot.mean() for op in self.operation_points]
             op_std = [op.dptot.std() for op in self.operation_points]
-        ax.errorbar([opm[0] for opm in op_mean],
-                    [opm[1] for opm in op_mean],
-                    [ops[1] for ops in op_std],
-                    [ops[0] for ops in op_std],
-                    *args, **kwargs)
+            ax.errorbar([opm[0] for opm in op_mean],
+                        [opm[1] for opm in op_mean],
+                        [ops[1] for ops in op_std],
+                        [ops[0] for ops in op_std],
+                        *args, **kwargs)
         ax.set_xlabel('Volume flow rate / $m^3/s$')
         if dimless:
             ax.set_ylabel('Pressure coefficient / $-$')
@@ -270,22 +347,84 @@ class FanCurve:
             ax.set_ylabel('Fan total pressure difference / $Pa$')
         return ax
 
+    def plot_static_pressure_curve(self, *args, **kwargs):
+        """Plot the static pressure fan curve if exists"""
+        ax = kwargs.pop('ax', None)
+        plot_dimless = kwargs.pop('dimless', False)
+        if ax is None:
+            ax = plt.gca()
+        if plot_dimless:
+            psi_mean = [np.nanmean(op.psi) for op in self.operation_points]
+            phi_mean = [np.nanmean(op.phi) for op in self.operation_points]
+            psi_std = [np.nanstd(op.psi) for op in self.operation_points]
+            phi_std = [np.nanstd(op.phi) for op in self.operation_points]
+            ax.errorbar(phi_mean,
+                        psi_mean,
+                        phi_std,
+                        psi_std,
+                        *args, **kwargs)
+        else:
+            op_mean = [op.dpstat.mean() for op in self.operation_points]
+            op_std = [op.dpstat.std() for op in self.operation_points]
+            ax.errorbar([opm[0] for opm in op_mean],
+                        [opm[1] for opm in op_mean],
+                        [ops[1] for ops in op_std],
+                        [ops[0] for ops in op_std],
+                        *args, **kwargs)
+        ax.set_xlabel('Volume flow rate / $m^3/s$')
+        if dimless:
+            ax.set_ylabel('Pressure coefficient / $-$')
+        else:
+            ax.set_ylabel('Fan static pressure difference / $Pa$')
+        return ax
+
     def plot_efficiency_curve(self, *args, **kwargs):
         """Plot the fan efficiency curve"""
         ax = kwargs.pop('ax', None)
+        plot_dimless = kwargs.pop('dimless', False)
         if ax is None:
             ax = plt.gca()
-        op_mean = [op.etatot.mean() for op in self.operation_points]
-        op_std = [op.etatot.std() for op in self.operation_points]
-        ax.errorbar([opm[0] for opm in op_mean],
-                    [opm[1] for opm in op_mean],
-                    [ops[1] for ops in op_std],
-                    [ops[0] for ops in op_std],
-                    *args, **kwargs)
-        ax.set_xlabel('Volume flow rate / $m^3/s$')
+        if plot_dimless:
+            eta_mean = [np.nanmean(op.etatot.values) for op in self.operation_points]
+            phi_mean = [np.nanmean(op.phi) for op in self.operation_points]
+            eta_std = [np.nanstd(op.etatot.values) for op in self.operation_points]
+            phi_std = [np.nanstd(op.phi) for op in self.operation_points]
+            ax.errorbar(phi_mean,
+                        eta_mean,
+                        phi_std,
+                        eta_std,
+                        *args, **kwargs)
+            ax.set_xlabel('phi / $-$')
+        else:
+            op_mean = [op.etatot.mean() for op in self.operation_points]
+            op_std = [op.etatot.std() for op in self.operation_points]
+            ax.errorbar([opm[0] for opm in op_mean],
+                        [opm[1] for opm in op_mean],
+                        [ops[1] for ops in op_std],
+                        [ops[0] for ops in op_std],
+                        *args, **kwargs)
+            ax.set_xlabel('Volume flow rate / $m^3/s$')
         ax.set_ylabel('Fan total efficiency / $-$')
 
     def affine(self, n_new: float) -> "FanCurve":
         """Return an affine fan curve with new revolution speed `n_new`"""
         return FanCurve(operation_points=[op.affine(n_new) for op in self.operation_points],
                         name=self.name)
+
+    def write_csv(self,
+                  filename: pathlib.Path,
+                  list_of_variables: List[str],
+                  overwrite: bool = False) -> pathlib.Path:
+        """Write csv file"""
+        filename = pathlib.Path(filename)
+        if filename.exists() and not overwrite:
+            raise FileNotFoundError('File exists and overwrite is set to False!')
+        variables = [self.__getattribute__(name) for name in list_of_variables]
+        if not all([isinstance(_var, list) for _var in variables]):
+            raise TypeError('Expecting all variables to be list!')
+        with open(filename, 'w') as f:
+            f.write(f','.join(list_of_variables))
+            for idx in range(len(variables[0])):
+                line = f','.join([str(variables[ivar][idx]) for ivar in range(len(variables))])
+                f.write(f'\n{line}')
+        return filename

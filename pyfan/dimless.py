@@ -7,7 +7,6 @@ from dimensionless to physical variables
 from typing import Union
 
 import numpy as np
-from numpy import pi
 
 
 def psi(dp: Union[float, np.ndarray],
@@ -27,7 +26,8 @@ def psi(dp: Union[float, np.ndarray],
     D: `float`
         Diameter [m] of the vane
     """
-    return 2 * dp / (pi ** 2 * rho * D ** 2 * n ** 2)
+    u2 = np.pi * n * D
+    return dp / (rho / 2 * u2 ** 2)
 
 
 def psi2dptot(psi, n, rho, D):
@@ -44,7 +44,7 @@ def psi2dptot(psi, n, rho, D):
     D: `float`
         Diameter [m] of the vane
     """
-    return psi * (0.5 * pi ** 2 * rho * D ** 2 * n ** 2)
+    return psi * (0.5 * np.pi ** 2 * rho * D ** 2 * n ** 2)
 
 
 def phi(vfr, n, D):
@@ -59,7 +59,8 @@ def phi(vfr, n, D):
     D: `float`
         Diameter [m] of the vane
     """
-    return 4 * vfr / (pi ** 2 * D ** 3 * n)
+    u2 = np.pi * n * D
+    return vfr / (np.pi / 4 * D ** 2 * u2)
 
 
 def phi2vfr(phi, n, D):
@@ -74,4 +75,4 @@ def phi2vfr(phi, n, D):
     D: `float`
         Diameter [m] of the vane
     """
-    return phi * (pi ** 2 * D ** 3 * n) / 4
+    return phi * (np.pi ** 2 * D ** 3 * n) / 4

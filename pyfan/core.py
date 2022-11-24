@@ -1,12 +1,13 @@
 """Core module"""
-
 import enum
 import pathlib
+from abc import ABC
 from dataclasses import dataclass
 from typing import Union, List, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
+import xarray as xr
 
 from . import dimless
 
@@ -140,17 +141,53 @@ class FanPhi(_FanIntegralQuantity):
         return ax
 
 
+class Pressure(ABC):
+    """Pressure (abstract) class"""
+
+    def __init__(self, values):
+        self.values = values
+
+    def __len__(self):
+        return len(self.values)
+
+
+class PressureDifference(Pressure):
+    """Pressure difference between two points"""
+
+
+class TotalPressure(Pressure):
+    """Total pressure (static+dynamic)"""
+
+
+class TotalPressureDifference(Pressure):
+    """Total pressure difference between two points"""
+
+
+class StaticPressure(Pressure):
+    """Static pressure"""
+
+
+class StaticPressureDifference(Pressure):
+    """Static pressure difference between two points"""
+
+
+class DynamicPressure(Pressure):
+    """Dynamic Pressure"""
+
+
 class FanOperationPoint:
-    """Fan Operation Point class"""
+    """Fan Operation Point class
+    Units are expected to be SI units!
+    """
 
     def __init__(self,
-                 vfr: np.ndarray = None,
-                 dpstat: np.ndarray = None,
-                 dptot: np.ndarray = None,
-                 torque: np.ndarray = None,
-                 revspeed: Union[float, np.ndarray] = None,
-                 fan_properties: FanProperties = None,
-                 density: Union[float, np.ndarray] = 1.2
+                 vfr: np.ndarray,
+                 pressure_difference: Union[PressureDifference, List[PressureDifference]],
+                 revspeed: Union[float, np.ndarray],
+                 density: Union[float, np.ndarray],
+                 torque: np.ndarray,
+                 fan_properties: FanProperties,
+                 time_vector: Union[np.ndarray] = None
                  ):
         """Fan Operation Point class.
         Takes differential pressure data (difference between outlet and inlet).
@@ -176,6 +213,87 @@ class FanOperationPoint:
             self._vfr = -1 * vfr
         else:
             self._vfr = vfr
+
+        if isinstance(pressure_difference, list):
+            # expecting two entries max!
+            if len(pressure_difference) != 2:
+                raise ValueError('Expecting exactly 2 entries')
+
+            if isinstance(pressure_difference[0], TotalPressureDifference):
+                _dptot = pressure_difference[0].values
+            elif isinstance(pressure_difference[0], StaticPressureDifference):
+                _dpstat = pressure_difference[0].values
+            else:
+                raise TypeError('Expected TotalPressureDifference or StaticPressureDifference')
+
+            if isinstance(pressure_difference[1], TotalPressureDifference):
+                _dptot = pressure_difference[1].values
+            elif isinstance(pressure_difference[1], StaticPressureDifference):
+                _dpstat = pressure_difference[1].values
+            else:
+                raise TypeError('Expected TotalPressureDifference or StaticPressureDifference')
+
+            if time_vector is not None:
+                xr_time_vector = xr.DataArray(dims='time', data=time_vector,
+                                              attrs={'long_name': 'time',
+                                                     'units': 's'})
+                self._dptot = xr.DataArray(dims='time', data=_dptot,
+                                           coords={'time': xr_time_vector},
+                                           attrs={'long_name': 'Total pressure difference',
+                                                  'units': 'Pa'})
+
+                self._dpstat = xr.DataArray(dims='time', data=_dpstat,
+                                            coords={'time': xr_time_vector},
+                                            attrs={'long_name': 'Static pressure difference',
+                                                   'units': 'Pa'})
+            else:
+                self._dpstat = _dpstat
+                self._dptot = _dptot
+        else:
+            if not isinstance(pressure_difference, (TotalPressureDifference,
+                                                    StaticPressureDifference)):
+                raise TypeError(
+                    'Expecting data of type TotalPressureDifference or StaticPressureDifference.'
+                    ' Please provide data as TotalPressureDifference or '
+                    f'StaticPressureDifference but not {type(pressure_difference)}'
+                )
+
+            self._fan_properties = fan_properties
+
+            if isinstance(pressure_difference, StaticPressureDifference):
+                print('Computing total pressure difference based on static')
+                p_dyn_out = density / 2 * (vfr / self._fan_properties.area_inlet) ** 2
+                p_dyn_in = density / 2 * (vfr / self._fan_properties.area_outlet) ** 2
+                dptot = pressure_difference.values + p_dyn_out - p_dyn_in
+                if time_vector is not None:
+                    xr_time_vector = xr.DataArray(dims='time', data=time_vector,
+                                                  attrs={'long_name': 'time',
+                                                         'units': 's'})
+                    self._dptot = xr.DataArray(dims='time', data=dptot,
+                                               coords={'time': xr_time_vector},
+                                               attrs={'long_name': 'Total pressure difference',
+                                                      'units': 'Pa'})
+
+                    self._dpstat = xr.DataArray(dims='time', data=pressure_difference.values,
+                                                coords={'time': xr_time_vector},
+                                                attrs={'long_name': 'Static pressure difference',
+                                                       'units': 'Pa'})
+                else:
+                    self._dptot = dptot
+                    self._dpstat = pressure_difference.values
+            elif isinstance(pressure_difference, TotalPressureDifference):
+                self._dpstat = None
+                if time_vector is not None:
+                    xr_time_vector = xr.DataArray(dims='time', data=time_vector,
+                                                  attrs={'long_name': 'time',
+                                                         'units': 's'})
+                    self._dptot = xr.DataArray(dims='time', data=pressure_difference.values,
+                                               coords={'time': xr_time_vector},
+                                               attrs={'long_name': 'Total pressure difference',
+                                                      'units': 'Pa'})
+                else:
+                    self._dptot = pressure_difference.values
+
         self._torque = torque
         self._etatot = None
         self._fluid_power = None
@@ -184,13 +302,6 @@ class FanOperationPoint:
         self._revspeed = revspeed
         if not isinstance(fan_properties, FanProperties):
             raise TypeError(f'Expect class FanProperties for parameter fan_properties but git {type(fan_properties)}')
-        self._fan_properties = fan_properties
-        self._dpstat = dpstat
-        if dpstat is not None and dptot is None:
-            self._dptot = dpstat + self._rho / 2 * (self._vfr / fan_properties.area_outlet) ** 2 - self._rho / 2 * (
-                    self._vfr / fan_properties.area_inlet) ** 2
-        else:
-            self._dptot = dptot
 
     def __lt__(self, other) -> bool:
         return np.mean(self._vfr) < np.mean(other.vfr)
@@ -215,6 +326,8 @@ class FanOperationPoint:
     @property
     def dpstat(self) -> FanTotalPressureDifference:
         """Fan total pressure difference"""
+        if self._dpstat is None:
+            return None
         return FanStaticPressureDifference(self._vfr, self._dpstat)
 
     @property
@@ -257,13 +370,21 @@ class FanOperationPoint:
 
     def affine(self, n_new: float) -> "FanOperationPoint":
         """Return an affine operation point with new revolution speed n_new"""
-        return FanOperationPoint(vfr=self._vfr * n_new / self._revspeed,
-                                 dpstat=self._dpstat * n_new ** 2 / self._revspeed ** 2,
-                                 dptot=self._dptot * n_new ** 2 / self._revspeed ** 2,
-                                 torque=self._torque,
-                                 revspeed=self._revspeed,
-                                 fan_properties=self._fan_properties,
-                                 density=self._rho)
+        new_data = dict(vfr=self._vfr * n_new / self._revspeed,
+                        density=self._rho,
+                        revspeed=n_new,
+                        torque=self._torque,
+                        fan_properties=self._fan_properties)
+        if self._dpstat is not None and self._dptot is not None:
+            pressure_difference = [TotalPressureDifference(self._dptot * n_new ** 2 / self._revspeed ** 2),
+                                   StaticPressureDifference(self._dpstat * n_new ** 2 / self._revspeed ** 2),
+                                   ]
+        elif self._dpstat is not None:
+            pressure_difference = TotalPressureDifference(self._dptot * n_new ** 2 / self._revspeed ** 2)
+        elif self._dptot is not None:
+            pressure_difference = StaticPressureDifference(self._dptot * n_new ** 2 / self._revspeed ** 2)
+        new_data['pressure_difference'] = pressure_difference
+        return FanOperationPoint(**new_data)
 
 
 class DataSource(enum.Enum):

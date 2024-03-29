@@ -1,7 +1,6 @@
-import unittest
-
 import matplotlib.pyplot as plt
 import numpy as np
+import unittest
 import xarray as xr
 
 import pyfan
@@ -28,7 +27,8 @@ class TestOP(unittest.TestCase):
             op = pyfan.FanOperationPoint(vfr=0, pressure_difference=60,
                                          density=1.2,
                                          revspeed=10, fan_properties=self.fan_properties)
-        op = pyfan.FanOperationPoint(vfr=0, pressure_difference=pyfan.TotalPressureDifference(60.),
+        op = pyfan.FanOperationPoint(vfr=0,
+                                     pressure_difference=pyfan.TotalPressureDifference(60.),
                                      density=1.2,
                                      torque=0.5,
                                      revspeed=10, fan_properties=self.fan_properties)

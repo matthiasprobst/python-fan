@@ -3,7 +3,7 @@ import enum
 import pathlib
 from abc import ABC
 from dataclasses import dataclass
-from typing import Union, List, Tuple
+from typing import Union, List
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -20,31 +20,7 @@ class FanProperties:
     area_outlet: float
 
 
-class _FanIntegralQuantity:
-
-    def __getitem__(self, item):
-        return FanTotalPressureDifference(self.vfr[item],
-                                          self.values[item])
-
-    def plot(self, *args, **kwargs):
-        """Plot the total pressure difference. x value is the volume flow rate"""
-        ax = kwargs.pop('ax', None)
-        if ax is None:
-            ax = plt.gca()
-        ax.plot(self.vfr, self.values, *args, **kwargs)
-        ax.set_xlabel('Volume flow rate / $m^3/s$')
-        return ax
-
-    def mean(self) -> Tuple[float, float]:
-        """Calls np.nanmean"""
-        return np.nanmean(self.vfr), np.nanmean(self.values)
-
-    def std(self) -> Tuple[float, float]:
-        """Calls np.nanstd"""
-        return np.nanstd(self.vfr), np.nanstd(self.values)
-
-
-class FanTotalEfficiency(_FanIntegralQuantity):
+class FanTotalEfficiency:
     """Fan Total Efficiency Class"""
 
     def __init__(self,
@@ -55,12 +31,15 @@ class FanTotalEfficiency(_FanIntegralQuantity):
 
     def plot(self, *args, **kwargs):
         """Plot the total pressure difference. x value is the volume flow rate"""
-        ax = super().plot(*args, **kwargs)
+        ax = kwargs.pop('ax', None)
+        if ax is None:
+            ax = plt.gca()
+        ax.plot(self.vfr, self.values, *args, **kwargs)
         ax.set_ylabel('Fan total efficiency / -')
         return ax
 
 
-class FanTotalPressureDifference(_FanIntegralQuantity):
+class FanTotalPressureDifference:
     """Fan Total Pressure Difference Class"""
 
     def __init__(self,
@@ -71,12 +50,22 @@ class FanTotalPressureDifference(_FanIntegralQuantity):
 
     def plot(self, *args, **kwargs):
         """Plot the total pressure difference. x value is the volume flow rate"""
-        ax = super().plot(*args, **kwargs)
+        ax = kwargs.pop('ax', None)
+        if ax is None:
+            ax = plt.gca()
+        ax.plot(self.vfr, self.values, *args, **kwargs)
+        ax.set_xlabel('Volume flow rate / $m^3/s$')
+        ax.set_ylabel('Fan total pressure difference / $Pa$')
+        return ax
+
+    def errorbar(self, *args, **kwargs):
+        """Plot the total pressure difference. x value is the volume flow rate"""
+        ax = super().errorbar(*args, **kwargs)
         ax.set_ylabel('Fan total pressure difference / $Pa$')
         return ax
 
 
-class FanStaticPressureDifference(_FanIntegralQuantity):
+class FanStaticPressureDifference:
     """Fan Total Pressure Difference Class"""
 
     def __init__(self,
@@ -92,14 +81,14 @@ class FanStaticPressureDifference(_FanIntegralQuantity):
         return ax
 
 
-class FanRevolutionSpeed(_FanIntegralQuantity):
+class FanRevolutionSpeed:
     """Fan Total Pressure Difference Class"""
 
     def __init__(self,
                  vfr: Union[float, np.ndarray],
-                 revspeed: Union[float, np.ndarray]):
+                 revolution_speed: Union[float, np.ndarray]):
         self.vfr = vfr
-        self.values = revspeed
+        self.values = revolution_speed
 
     def plot(self, *args, **kwargs):
         """Plot the revolution speed"""
@@ -108,7 +97,7 @@ class FanRevolutionSpeed(_FanIntegralQuantity):
         return ax
 
 
-class FanPsi(_FanIntegralQuantity):
+class FanPsi:
     """Pressure Number Class"""
 
     def __init__(self,
@@ -124,7 +113,7 @@ class FanPsi(_FanIntegralQuantity):
         return ax
 
 
-class FanPhi(_FanIntegralQuantity):
+class FanPhi:
     """Flow Coefficient Class"""
 
     def __init__(self,
@@ -159,10 +148,6 @@ class TotalPressure(Pressure):
     """Total pressure (static+dynamic)"""
 
 
-class TotalPressureDifference(Pressure):
-    """Total pressure difference between two points"""
-
-
 class StaticPressure(Pressure):
     """Static pressure"""
 
@@ -175,17 +160,80 @@ class DynamicPressure(Pressure):
     """Dynamic Pressure"""
 
 
+from dataclasses import field
+
+
+@dataclass
+class _FanOperationPointInputData:
+    values: Union[int, float, np.ndarray]
+    units: str = None
+    expected_units: str = field(default='', init=False)
+
+    def __repr__(self):
+        return f'<{self.__class__.__name__} [{self.units}]>'
+
+    def __str__(self):
+        return self.__repr__()
+
+    def __post_init__(self):
+        if self.units is None and not isinstance(self.values, xr.DataArray):
+            raise RuntimeError('Units information is missing')
+        if isinstance(self.values, (np.ndarray, float, int)):
+            self.units = self._check_units(self.units)
+            self.values = xr.DataArray(data=self.values, attrs={'units': self.units})
+        elif isinstance(self.values, xr.DataArray):
+            if 'units' in self.values.attrs:
+                self.units = self._check_units(self.values.attrs['units'])
+            else:
+                raise RuntimeError('Units information is missing')
+        else:
+            raise TypeError(f'Unexpected type for values: {type(self.values)}')
+
+    def _check_units(self, units):
+        units.replace('^', '**')
+        if units != self.expected_units:
+            raise ValueError(f'Expected unit for {self.__class__.__name__} is "{self.expected_units}", not "{units}"')
+        return units
+
+
+@dataclass
+class TotalPressureDifference(_FanOperationPointInputData):
+    """Total pressure difference between two points"""
+    expected_units: str = field(default='Pa', init=False)
+
+
+@dataclass
+class Density(_FanOperationPointInputData):
+    expected_units: str = field(default='kg/m**3', init=False)
+
+
+@dataclass
+class Torque(_FanOperationPointInputData):
+    expected_units: str = field(default='Nm', init=False)
+
+
+@dataclass
+class VolumeFlowRate(_FanOperationPointInputData):
+    expected_units: str = field(default='m**3/s', init=False)
+
+
+@dataclass
+class RevolutionSpeed(_FanOperationPointInputData):
+    expected_units: str = field(default='1/s', init=False)
+
+
 class FanOperationPoint:
     """Fan Operation Point class
     Units are expected to be SI units!
     """
 
     def __init__(self,
-                 vfr: np.ndarray,
-                 pressure_difference: Union[PressureDifference, List[PressureDifference]],
-                 revspeed: Union[float, np.ndarray],
-                 density: Union[float, np.ndarray],
-                 torque: np.ndarray,
+                 *,  # make positional arguments mandatory
+                 vfr: VolumeFlowRate,
+                 pressure_difference: PressureDifference,
+                 revolution_speed: FanRevolutionSpeed,
+                 density: Density,
+                 torque: Torque,
                  fan_properties: FanProperties,
                  time_vector: Union[np.ndarray] = None
                  ):
@@ -203,16 +251,16 @@ class FanOperationPoint:
             Total pressure difference between outlet and inlet of the fan
         etatot: Union[float, np.ndarray]
             Total efficiency of the fan.
-        revspeed: Union[float, np.ndarray]
+        revolution_speed: Union[float, np.ndarray]
             Revolution speed of the fan.
         fan_properties: FanProperties
             The properties of the fan, like outer diameter D2 etc.
         """
         # correct negative vfr
-        if np.median(vfr) < 0.:
-            self._vfr = -1 * vfr
+        if np.median(vfr.values) < 0.:
+            self._vfr = -1 * vfr.values
         else:
-            self._vfr = vfr
+            self._vfr = vfr.values
 
         if isinstance(pressure_difference, list):
             # expecting two entries max!
@@ -299,7 +347,7 @@ class FanOperationPoint:
         self._fluid_power = None
         self._mech_power = None
         self._rho = density
-        self._revspeed = revspeed
+        self._revspeed = revolution_speed
         if not isinstance(fan_properties, FanProperties):
             raise TypeError(f'Expect class FanProperties for parameter fan_properties but git {type(fan_properties)}')
 
@@ -310,7 +358,7 @@ class FanOperationPoint:
         return FanOperationPoint(self.vfr[item],
                                  self.dptot[item],
                                  self.etatot[item],
-                                 self.revspeed[item],
+                                 self.revolution_speed[item],
                                  self.fan_properties)
 
     @property
@@ -331,27 +379,21 @@ class FanOperationPoint:
         return FanStaticPressureDifference(self._vfr, self._dpstat)
 
     @property
-    def revspeed(self):
+    def revolution_speed(self):
         """Fan revolution speed"""
         return FanRevolutionSpeed(self._vfr, self._revspeed)
 
-    @property
-    def etatot(self) -> FanTotalEfficiency:
+    def etatot(self, friction_torque) -> FanTotalEfficiency:
         """Fan total efficiency"""
         if self._etatot is None:
             self._fluid_power = np.nanmean(self._vfr * self._dptot)
-            self._mech_power = np.nanmean(self._torque) * 2 * np.pi * np.nanmean(self._revspeed)
+            if isinstance(friction_torque, (xr.DataArray, np.ndarray)):
+                _friction_torque = np.nanmean(friction_torque)
+            else:
+                _friction_torque = friction_torque
+            self._mech_power = (np.nanmean(self._torque) - _friction_torque) * 2 * np.pi * np.nanmean(self._revspeed)
             self._etatot = self._fluid_power / self._mech_power
         return FanTotalEfficiency(self._vfr, np.ones_like(self._vfr) * self._etatot)
-
-    def plot_fan_total_pressure(self, mean=False, **kwargs):
-        """Plot fan total pressure"""
-        ax = kwargs.pop('ax', None)
-        if ax is None:
-            ax = plt.gca()
-        if mean:
-            return ax.plot(np.mean(self.vfr), np.mean(self.dptot), **kwargs)
-        return ax.plot(self.vfr, self.dptot, **kwargs)
 
     @property
     def psi(self):
@@ -372,7 +414,7 @@ class FanOperationPoint:
         """Return an affine operation point with new revolution speed n_new"""
         new_data = dict(vfr=self._vfr * n_new / self._revspeed,
                         density=self._rho,
-                        revspeed=n_new,
+                        revolution_speed=n_new,
                         torque=self._torque,
                         fan_properties=self._fan_properties)
         if self._dpstat is not None and self._dptot is not None:
